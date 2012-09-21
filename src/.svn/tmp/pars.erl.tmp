@@ -1,0 +1,114 @@
+%%% File    : pars.erl
+%%% Author  : Michal & Björn
+%%% Description : 
+%%% Created : 25 Oct 2010 by mysko <mysko@mysko-laptop>
+
+-module(pars).
+-compile(export_all).
+
+%Check function
+%Checks the begining of the string 
+start(File) ->
+<<<<<<< .mine
+    {A,_} = read_text(File),
+    annouce(A),
+    info(A).
+=======
+    {A,_} = filedata:read(File),search(A).
+>>>>>>> .r22
+
+search(Data)->
+    {string, Value} = annouce(Data).
+   % {string, Value} = info(Data).
+
+%-----------------------------------------------------------
+%annouce-list om vi får skiten att funka
+-ifdef(Bjorne).
+
+annouce_list(Info) ->
+    {dic, Data} = Info,
+    {value, {_,Value}} = lists:keysearch({string, "announce-list"},tuple_size(Data),Data),
+    Value.
+-endif().
+
+%-----------------------------------------------------------
+annouce(Info) ->
+    {dic, Data} = Info,
+    {value, {_,Value}} = lists:keysearch({string, "announce"},tuple_size(Data),Data),
+    Value.
+
+info(Info) ->
+    {dic, Data} = Info,
+    {value, {_,Value}} = lists:keysearch({string, "info"},1,Data),
+    Value.
+
+
+
+sha1(X)->
+    crypto:start(),
+    S = crypto:sha(X),
+    crypto:stop(),
+    binary_to_list(S).    
+
+%bencode_reader([]) -> [];
+bencode_reader([H|T])->
+    bencode_reader([H|T], []).
+bencode_reader([H|Rest], Acc)->
+    case H of
+	$l -> list_decode(Rest,[]);
+	$i -> int_decode(Rest,[]);
+      	$d -> dic_decode(Rest,[]);
+	$e -> {ends, Rest};
+	% if just a bit string
+	S  -> string_decode([S|Rest],Acc)
+    end.
+
+
+read_int([H|T], Acc) when (H >= $0) and (H =< $9) ->
+    read_int(T, [H|Acc]);
+read_int(T, Acc)  ->   
+    Value = list_to_integer(lists:reverse(Acc)),
+    {{integer, Value}, T}.
+
+int_decode(Input, []) ->
+    {{integer, Value}, [$e|T]} = read_int(Input,[]),
+    {{integer, Value}, T}.
+
+%% check if T or C == : ...
+%Decoding lists
+
+
+list_decode([$e|T], Acc)->
+    {{list, lists:reverse(Acc)}, T};
+list_decode(Input, Acc) ->
+    {Element, Rest} = bencode_reader(Input),
+    list_decode(Rest, [Element|Acc]).
+
+%Decoding dictionary
+
+dic_decode([],Acc) -> Acc;
+dic_decode(List, Acc)-> 
+    {Key,Rest1} = bencode_reader(List),
+    {Value,Rest2} = bencode_reader(Rest1),
+    NewAcc = [{Key, Value}|Acc],
+   
+    case Rest2 of
+	[$e|NotParsed] ->
+	    {{dic, lists:reverse(NewAcc)},NotParsed};
+	_ ->
+	    dic_decode(Rest2, NewAcc)
+    end.
+
+
+
+
+
+string_decode([H|Rest], Acc)->
+    if ((H >= $0) and (H =< $9)) ->  
+      string_decode(Rest, [H|Acc]);
+      H == $: ->
+	    Int = list_to_integer(lists:reverse(Acc)),
+	    {String, NotParsed} = lists:split(Int, Rest), 
+	    {{string, String}, NotParsed}
+    end.
+

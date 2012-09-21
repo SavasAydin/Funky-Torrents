@@ -1,0 +1,153 @@
+%%%-------------------------------------------------------------------
+%%% File    : commfunc.erl
+%%% Author  : BjöMag
+%%% Description : commfunc contains all functions for requesting and
+%%%               sending data between to peers. Processes will be
+%%%               spawned from these functions.
+%%%
+%%% Created :  1 Dec 2010 by STORmogulen <stormogulen@stormogulen-1320>
+%%%-------------------------------------------------------------------
+-module(commfunc).
+-compile(export_all).
+
+alive()->
+    <<0,0,0,0>>.
+
+choke()->
+    <<0,0,0,1,0>>.
+
+unchoke()->
+    <<0,0,0,1,1>>.
+
+interested()->
+    <<0,0,0,1,2>>.
+
+not_interested()->
+    <<0,0,0,1,3>>.
+
+have()-> %%!!!!!!!! Check further for piece index
+    <<0,0,0,5,4>>.
+
+
+
+bitfield(BitLength,BitField)-> 
+%%Might be the same problem as in piece below, BitLength might have to be converted
+%%manually before sending.
+    <<0,0,0,(1+BitLength/binary),5,BitField/binary>>.
+%
+% C = connector:handshake("129.16.166.47", 51413).
+% gen_tcp:send(C, commfunc:request(<<5:32>>, <<0:32>>, <<16384:32>>)).
+%
+request(Index,Offset,Length)->
+    <<0,0,0,13,6,Index:32/binary,Offset:32/binary,Length/binary>>.
+
+%% Check if we have to convert BlockLength to binary manually(paper and pen)
+piece(BlockLength,Index,Offset,Block)->
+    <<0,0,0,9,BlockLength/binary,7,Index/binary,Offset/binary,Block/binary>>.
+
+cancel(Index,Begin,Length)->
+    <<0,0,0,13,8,Index/binary,Begin/binary,Length/binary>>.
+
+port(ListenPort)->
+    <<0,0,0,3,9,ListenPort>>.
+
+
+incomming(<<>>) ->
+    done;
+incomming(<<0,0,0,1,0,Rest/binary>>) -> %choke
+    io:format("choke~n"),
+    incomming(Rest);
+incomming(<<0,0,0,1,1,Rest/binary>>) -> %unchoke
+    io:format("unchoke~n"),
+    incomming(Rest);
+incomming(<<0,0,0,1,2,Rest/binary>>) -> %interested
+    io:format("interested~n"),
+    incomming(Rest);
+incomming(<<0,0,0,1,3,Rest/binary>>) -> %not interested
+    io:format("not interested~n"),
+    incomming(Rest);
+incomming(<<0,0,0,5,4, Payload:4/binary,Rest/binary>>) -> % have
+    PieceNumber = multibyte:binary_to_multibyte_integer(Payload),
+    io:format("have piece nr: ~w~n", [PieceNumber]),
+    Pid ! PieceNumber,
+    incomming(Rest);
+
+
+incomming(<<0,0,0,13,6,Index:32/binary, Offset:32/binary, % request
+	    Length:32/binary, Rest/binary>>) ->
+      io:format("Received request for ~p bytes ~p bytes into piece ~p~n", [
+      multibyte:binary_to_multibyte_integer(Length),
+      multibyte:binary_to_multibyte_integer(Offset),
+      multibyte:binary_to_multibyte_integer(Index)
+  ]),
+    io:format("request~n"),
+    incomming(Rest);
+
+incomming(<<0,0,0,13,8,Index:32/binary, Offset:32/binary, % cancel
+	    Length:32/binary, Rest/binary>>) ->
+      io:format("Received request for ~p bytes ~p bytes into piece ~p~n", [
+      multibyte:binary_to_multibyte_integer(Length),
+      multibyte:binary_to_multibyte_integer(Offset),
+      multibyte:binary_to_multibyte_integer(Index)
+  ]),
+
+    incomming(Rest);
+
+incomming(<<Msg:4/binary, 5, Rest/binary>>) -> % bitfield
+
+      Length  = multibyte:binary_to_multibyte_integer(Msg) - 1,
+  <<Payload:Length/binary, Unused/binary>> = Rest,
+  io:format("Received bitfield of length ~p with payload ~n~p~n", [Length, Payload]),
+    io:format("rest: ~w~n",[Rest]),incomming(Unused);
+
+incomming(Other) ->
+    io:format("some strange data:~w~n", [Other]).
+    
+
+%% -----------------------------------------------------------------------------
+%% cut the info_hash and convert it to hexadecimal
+%% calls the escape_html function and convert it to URL format
+%% calls the final_fix to fix the problem if the hexadecimal if lower than 16
+%% -----------------------------------------------------------------------------
+cut(List)->
+    cut(List,[]).
+
+cut([],NewList)->
+  % final_fix(escape_html(lists:reverse(NewList)));
+lists:reverse(NewList);
+cut([H1|[H2|OldList]],NewList) ->	    
+    cut(OldList, [httpd_util:hexlist_to_integer([H1]++[H2])|NewList]).
+
+
+%% --------------------------------------------
+%% OBS! STOLEN!!! 
+%% http://paste.lisp.org/display/59691
+%% 2010-12-08
+%% convert the hexadecimal to URL format
+%% ---------------------------------------------
+
+escape_html(Data)->
+    D = lists:map(fun(X)->
+			  Hash2 = erlang:integer_to_list(X, 16),
+			  lists:concat(["%"|[Hash2]])
+			      end, Data),
+    lists:concat(D).
+%% ------------------------------------------------------------------------------
+%% This one we constructed our selves after some "thinking-beers"
+%% / BjöMag
+%% the fix in case that one zero is missing in the URL format
+%% ------------------------------------------------------------------------------
+final_fix(Sentence)->
+    final_fix(string:tokens(Sentence,"%"),[]).
+
+final_fix([],NewList)->
+    "%" ++ string:join(lists:reverse(NewList),"%");
+
+final_fix([H|OldList],NewList)->
+    case length(H) == 2 of
+	true->
+	    final_fix(OldList,[H|NewList]);
+	false ->
+	    NewH = [48|H],
+	    final_fix(OldList,[NewH|NewList])
+    end.

@@ -1,0 +1,60 @@
+%%%-------------------------------------------------------------------
+%%% File    : commfunc.erl
+%%% Author  : BjöMag
+%%% Description : commfunc contains all functions for requesting and
+%%%               sending data between to peers. Processes will be
+%%%               spawned from these functions.
+%%%
+%%% Created :  1 Dec 2010 by STORmogulen <stormogulen@stormogulen-1320>
+%%%-------------------------------------------------------------------
+-module(commfunc).
+-compile(export_all).
+
+keep_alive()->
+    <<0,0,0,0>>.
+
+choke()->
+    <<0,0,0,1,0>>.
+
+unchoke()->
+    <<0,0,0,1,1>>.
+
+interested()->
+    <<0,0,0,1,2>>.
+
+not_interested()->
+    <<0,0,0,1,3>>.
+
+have()-> %%!!!!!!!! Check further for piece index
+    <<0,0,0,5,4>>.
+
+bitfield(BitLength,BitField)-> 
+%%Might be the same problem as in piece below, BitLength might have to be converted
+%%manually before sending.
+    <<0,0,0,1,BitLength/binary,5,BitField/binary>>.
+
+<<<<<<< .mine
+request(Index,Begin,Length)->
+    <<0,0,0,13,6,Index/binary,Begin/binary,Length/binary>>.
+=======
+request(Socket,Index,Begin,Length)->
+    gen_tcp:send(Socket, <<0,0,0,13,6,Index,Begin,Length>> ), %%maybe 0,0,0,13,6
+    ok.
+>>>>>>> .r18
+
+%% Check if we have to convert BlockLength to binary manually(paper and pen)
+piece(BlockLength,Index,Begin,Block)->
+    <<0,0,0,9,BlockLength/binary,7,Index/binary,Begin/binary,Block/binary>>.
+
+cancel(Index,Begin,Length)->
+    %% Check numbers with request().
+<<<<<<< .mine
+    <<0,0,0,13,8,Index/binary,Begin/binary,Length/binary>>.
+=======
+    gen_tcp:send(Socket, <<0,0,0,13,8,Index,Begin,Length>>),
+    ok.
+>>>>>>> .r18
+
+port(ListenPort)->
+    <<0,0,0,3,9,ListenPort>>.
+

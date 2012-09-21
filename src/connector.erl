@@ -1,0 +1,317 @@
+%%%------------------------------------------------------------------------------
+%%% File    : connector.erl
+%%% Author  : Björn Eriksson, Magnus Bergqvist and Savas Aydin
+%%%
+%%%           references stated in respective function
+%%% 
+%%% Tests by: Ali Issa
+%%%
+%%% Description : The Funkiest Connector in Town!
+%%%               
+%%%               The connector module contains the main logic for 
+%%%               the Funkytorrents bittorrent client.
+%%%               This is where it all starts.
+%%%
+%%% Version : 1.0
+%%% Updated : 17 Dec 2010
+%%%------------------------------------------------------------------------------
+-module(connector).
+-export([download/1,download_test/0,check_downloaded_file/0,download_wrong_input/0]).
+
+%% ------------------------------------------------------------------------------
+%% download tests
+%% if download_test() returns an atom true at the end, then the download has
+%successeded.
+%%check_downloaded_file checks that downloaded file exists in directory,then
+%returns true else false.
+%%download_wrong_input()tries to input wrong filename in the download function,
+%should crash.
+%% ------------------------------------------------------------------------------
+download_test()->
+    download_complete == connector:download("123.torrent").
+
+check_downloaded_file()->
+    filelib:is_file("123.torrent").
+
+download_wrong_input()->
+    connector:download("wrong_input.torrent").
+    
+%% ------------------------------------------------------------------------------
+%% download/1 takes a .torren-file's name (as a string) as argument.
+%% It starts the flow from parsing a .torrent-file
+%% to actually getting the file downloaded to the computers harddrive.
+%% 
+%% A process keeping track of the number of pieces to be downloaded is spawned,
+%% this is used by the downloading processes to retreive information from so
+%% that a piece is not downloaded twice.
+%% 
+%% After this the module check_id is called which calls for the download.
+%%
+%% When the download is complete the piece_list is unregistered and atom
+%% download_complete is returned.
+%% ------------------------------------------------------------------------------
+download(TorrentFile)->
+    PeerID = "-FT-1234567890123456",
+    URL = pars:get_announce(TorrentFile),
+    Info_Hash = pars:get_hash(TorrentFile),
+    PeerInfoList = tracker_connect(URL,commfunc:escape_html(Info_Hash), PeerID),
+    PieceInfo = commfunc:get_pieceInfo(TorrentFile),
+    NoOfPieces = element(1,PieceInfo),
+    register(piece_list,spawn_link(commfunc,get_pieceNumber,
+				   [lists:seq(0,NoOfPieces-1)])),
+    check_id(PeerInfoList, PeerID, TorrentFile, PieceInfo),
+
+    % after a download is complete, the piece_list is being unregistered
+    unregister(piece_list),
+    
+    % returns atom when it all closes.
+    download_complete.
+
+%% ------------------------------------------------------------------------------
+%% tracker_connect/3 takes Announce_URL, Info_hash and Peer_id as arguments
+%% and uses these to send a request for a list of available peers to the torrent
+%% tracker (Announce_URL). 
+%% When list of peers has been received it sends a new request to the tracker
+%% with CloseURL so that it will be unlisted there. This because there is no
+%% upload function in Funkytorrents software, so no one has any reason to send 
+%% requests to Funkytorrents.
+%% ------------------------------------------------------------------------------
+tracker_connect(Announce_URL,Info_hash,Peer_id)->
+    Port = 6881,
+    Uploaded = 0,
+    Downloaded = 0,
+    Left = 0,
+    Event = "stopped",
+    URL = lists:flatten(io_lib:format(
+        "~s?info_hash=~s&peer_id=~s&port=~p&uploaded=~p&downloaded=~p&left=~p",
+	      [Announce_URL,Info_hash,Peer_id,Port,Uploaded,Downloaded,Left])),   
+    inets:start(),
+    {ok, Reply} = httpc:request(URL),
+
+    %% not the most handsome solution, but need to close the tracker request =) 
+    CloseURL = lists:flatten(io_lib:format(
+"~s?info_hash=~s&peer_id=~s&port=~p&uploaded=~p&downloaded=~p&left=~p&event=~s",
+	               [Announce_URL,Info_hash,Peer_id,
+			Port,Uploaded,Downloaded,Left, Event])),
+    {ok, _CloseReply} = httpc:request(CloseURL),
+
+    %% taking out the bencode string from request(Reply).
+    {_,_,TheString} = Reply,
+    commfunc:get_peerInfo(TheString).
+
+%% ------------------------------------------------------------------------------
+%% When getting the call from download/1 the list of peers are itterated through
+%% recursively and checks if peer has Funkytorrents own PeerID. If so
+%% the entry will be skipped and a check will be performed for the next peer in
+%% the list. When a valid seeding peer has been found the download_process module
+%% is called.
+%% ------------------------------------------------------------------------------
+check_id([], _PeerID, _TorrentFile, _PieceInfo) ->
+    io:format("Peer_List empty~n"),
+    ok;
+check_id([{DestinationIP,Port,ExtPeerID}|Tail], PeerID, TorrentFile, PieceInfo)->
+    io:format("~p~n",[list_to_binary(pars:get_hash(TorrentFile))]),
+    case ExtPeerID == PeerID of
+	false ->
+	    download_process(DestinationIP,Port,
+			   list_to_binary(pars:get_hash(TorrentFile)),PieceInfo);
+	%% ----------------------------------------------------------------------
+	%% Some parts to be used in the future if several peers is to be 
+	%% connected at the same time:
+	    %spawn_link(?MODULE,download_process,[DestinationIP,Port,
+			%list_to_binary(pars:get_hash(TorrentFile)),PieceInfo])    
+	     %check_id(Tail,PeerID,TorrentFile,PieceInfo);
+	%%-----------------------------------------------------------------------
+	true ->
+	    check_id(Tail,PeerID,TorrentFile,PieceInfo)
+    end.
+
+%% ------------------------------------------------------------------------------
+%% Download Proces calls handshake/3 function and calls the piece_selector/2
+%% function with the returned Sock.
+%% ------------------------------------------------------------------------------
+download_process(IP,Port,Info_Hash,PieceInfo)->
+    {Sock, _HSAnswer} = handshake(IP,Port,Info_Hash),
+    io:format("~w~n",[PieceInfo]),
+	    piece_selector(Sock,PieceInfo).
+
+%% ------------------------------------------------------------------------------
+%% The handshake/3 function sends a hand shake to a peer and awaits a hand shake
+%% message back. It returns Sock and the answer message returned when a handshake
+%% is successfull.
+%%
+%% references: 
+%% https://github.com/logaan/erlang-bittorrent/blob/master/bittorrent.erl
+%% 12 Nov. 2010
+%%
+%% http://wiki.theory.org/BitTorrentSpecification
+%% 12 Nov. 2010
+%% ------------------------------------------------------------------------------
+
+
+handshake(DestinationIP, Port, Info_Hash) ->
+    io:format("Handshake~n"),    
+    {ok,Sock} = gen_tcp:connect(DestinationIP, Port, 
+                                 [binary, {packet, 0}, {active, false}]),
+    %% Send HandShake request
+    ok = gen_tcp:send(Sock, [19, "BitTorrent protocol",
+			     <<0,0,0,0,0,0,0,0>>,
+			     Info_Hash,
+			     "-FT-1234567890123456"]),
+    
+    %% Wait for HandShake back
+    case gen_tcp:recv(Sock, 68) of
+	{ok, << 19, "BitTorrent protocol", 
+			_ReservedBytes:8/binary, 
+			_InfoHash:20/binary, 
+			PeerID:20/binary >>} -> 
+	    io:format("Peer accepted HandShake:~w~n", 
+		      [list_to_atom(binary_to_list(PeerID))])
+    end,
+    ok = inet:setopts(Sock, [{packet, 4}, {active, true}, {packet_size, 33000}]),
+
+    receive 
+	%% the don't-care variable is in fact Port_number
+	{tcp, _, BitField} -> 
+	    io:format("~w~n", [BitField])
+    after 10000 ->
+	    ok
+    end,
+io:format("Sending interested~n"),
+    ok = gen_tcp:send(Sock,commfunc:interested()),
+    receive
+	{tcp,_,Answer} ->
+	    io:format("Svar ~w~n",[Answer])
+    end,
+    {Sock,Answer}.
+
+%% ------------------------------------------------------------------------------
+%% piece_selector/2 picks a new piece for download and selects which download
+%% loop to use depending on if it is a normal fullsize piece or the
+%% last piece with a smaller chunk in the end..
+%% ------------------------------------------------------------------------------
+piece_selector(Sock,PieceInfo)->
+
+    {NoOfPieces,_LastChunkLength,ChunkLength,NoOfChunksInFullPiece,
+     NoOfFullChunksInLastPiece,OutputFilename} = PieceInfo,
+
+    PieceLength = (ChunkLength*NoOfChunksInFullPiece),
+    piece_list!{get,self()}, %% ask for a piece to make a request for
+    receive
+	empty_list ->
+	    io:format("File downloaded TOTALLY!!!!! (MASTORDONTOR STYLEE! ;)~n"),
+	    ok_downloaded;
+	{piece,Piece} ->  
+	    % Check if it's the last piece in file
+	    case Piece == NoOfPieces-1 of
+		
+	       %if not, use variable NoOfChunksInFullPiece as counter argument
+		false ->
+		    io:format("piece: ~w~n",[Piece]),
+		    io:format("NoPiece ~w~n",[NoOfPieces]),
+		    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,
+						       <<0:32>>,
+						       <<ChunkLength:32>>)),
+		    piece_loop(Sock,PieceInfo,Piece,ChunkLength,
+			       NoOfChunksInFullPiece,0,
+			       OutputFilename,PieceLength),
+		    piece_selector(Sock, PieceInfo);
+
+	       %if so, use variable NoOfFullChunksInLastPiece as counter argument
+		true ->
+		    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,
+						       <<0:32>>,
+						       <<ChunkLength:32>>)),
+		    piece_loop(Sock,PieceInfo,Piece,ChunkLength,
+			       NoOfFullChunksInLastPiece,0,
+			       OutputFilename,PieceLength)
+	    end
+    end.
+
+%% ------------------------------------------------------------------------------
+%% piece_loop/8 sends requests for the chunks in the desired piece and writes
+%% them to the destination file when the data arrive.
+%% When reaching the base case (when counter has reached 0) a check
+%% is made wheter it is the last piece that is being downloaded or not.
+%% If so, it will send a request to the current peer for a chunk of
+%% the same length as the last chunk should be. Otherwise it will
+%% return back upo through the functions and get a new piece from the piece list
+%% to start downloading.
+%%
+%% Note: (Piece*PieceLength)+Offset) calculates the total offset in the file
+%%       i.e. exactly where the receiveddata shall be written.
+%% Comments in the base case function goes for the normal case function as well.
+%% ------------------------------------------------------------------------------
+piece_loop(Sock,PieceInfo,Piece,ChunkLength,0,
+	     Offset,OutputFilename,PieceLength) ->
+
+    {NoOfPieces,LastChunkLength,ChunkLength,_,_,OutputFilename} = PieceInfo,
+
+    case Piece == NoOfPieces-1 of
+	false ->
+	    io:format("Piece has been downloaded!~n");
+	true ->
+	    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,
+					       <<Offset:32>>,
+					       <<LastChunkLength:32>>)),
+            io:format("Downloading last chunk~n", []),
+	    
+            case commfunc:incomming(receive {tcp, _, InData} -> 
+					    InData; Any -> Any end)  of
+		{data, Data} ->
+		    filedata:writer(OutputFilename,
+				    ((Piece*PieceLength)+Offset),Data),
+		    gen_tcp:close(Sock);
+
+		% If something else is received from the peer, the same
+		% request will be sent over again
+		Other ->
+		    io:format("Shit that came in: ~w~n",[Other]),
+		    piece_loop(Sock,PieceInfo,Piece,ChunkLength,0,
+			       Offset,OutputFilename,PieceLength)
+		    %% Expected last message in to be response to last request.
+	    end
+    end;
+
+piece_loop(Sock,PieceInfo,Piece,ChunkLength,
+	   Counter,Offset,OutputFilename,PieceLength) -> 
+    receive
+        {tcp,_,InData} ->
+	    case commfunc:incomming(InData) of
+	        unchoke ->
+		    io:format("Asking for chunk in piece no: ~w",[Piece]),
+		    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,
+						       <<0:32>>,
+						       <<ChunkLength:32>>)),
+		    piece_loop(Sock,PieceInfo,Piece,ChunkLength,
+			       Counter,0,OutputFilename,PieceLength);
+		{data,Data} ->
+		    timer:sleep(1000),
+		    filedata:writer(OutputFilename,
+				    ((Piece*PieceLength)+Offset),Data),
+
+		    RequestOffset = (Offset+ChunkLength),
+		    io:format("Asking for chunk in piece no: ~w~n",[Piece]),
+                    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,
+						       <<RequestOffset:32>>,
+						       <<ChunkLength:32>>)),
+		    
+piece_loop(Sock,PieceInfo,Piece,ChunkLength,(Counter-1),
+			       RequestOffset,OutputFilename,PieceLength);
+
+	        _Else ->
+		    piece_loop(Sock,PieceInfo,Piece,ChunkLength,
+			       Counter,Offset,OutputFilename,PieceLength)      
+	    end
+    end.
+
+
+%% ------------------------------------------------------------------------------
+%% Mastodontor/2000 sind die Überfunktion auf alles Funktionen der Welt.
+%% (To be implemented).......
+%% ------------------------------------------------------------------------------
+
+    
+    
+    
+    

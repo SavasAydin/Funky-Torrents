@@ -1,0 +1,231 @@
+%%%-------------------------------------------------------------------
+%%% File    : connector.erl
+%%% Author  : BjöMag
+%%% Description : The Funkiest Connector in Town!
+%%%               Receives connections and determines the request.
+%%%               Calls functions according to request.
+%%%               start/0 and loop/1 receives all incomming messages
+%%%               client handles all outgoing messages
+%%%
+%%% Created : 12 Nov 2010
+%%%-------------------------------------------------------------------
+-module(connector).
+-compile(export_all).
+
+start() ->
+    %% Gets a ListenSocket number on port 6888 (std. torrent port)
+    {ok, ListenSock} = gen_tcp:listen(6881, [binary, {packet, 0}, 
+                                        {active, false}]),
+    loop(ListenSock).
+
+loop(ListenSock) ->
+
+    %% receives calling peers socket
+    {ok, PeerSock} = gen_tcp:accept(ListenSock),
+    
+    %% receives request from given Peer Socket
+    %% and acts upon given request
+    case gen_tcp:recv(PeerSock, 0) of
+        
+	%% handshake spawns a send process
+	%% !!!When sending a HS, use list to binary!!!
+	{ok, << 19, "BitTorrent protocol", 
+		_ReservedBytes:8/binary, 
+		_InfoHash:20/binary, 
+		_PeerID:20/binary >>} ->
+             
+	    io:format("HandShake Accepted ~n"),
+	
+	    gen_tcp:send(PeerSock, 
+		      list_to_binary([ 19, "BitTorrent protocol",
+				       <<0,0,0,0,0,0,0,0>>,
+				       "12345678901234567890",
+				       "FunkyTorrents Rules!" ])),
+	    ok_ali,
+	    loop(ListenSock);
+	
+	%% error, continues to loop
+	_Error ->
+	    io:format("HandShake Denied ~n"),
+	    loop(ListenSock),
+	    not_ok_ali
+    end.
+
+
+%% ------------------------------------------------------------------------------
+%% HandShake part of the connector module, i.e. the actual CONNECTOR!!
+%% The handshake/2 sends a hand shake to a peer and awaits a hand shake
+%% mesage back.
+%% ------------------------------------------------------------------------------
+peerList(_PeerInfo, List, 0) -> lists:reverse(List);
+peerList([], List, _Counter) -> lists:reverse(List); 
+peerList([PeerInfo|Next], List, Counter) ->
+    peerList(Next, [PeerInfo|List], Counter - 1).
+
+
+
+handshake(DestinationIP, Port, Info_Hash) ->
+    {ok, Sock} = gen_tcp:connect(DestinationIP, Port, 
+                                 [binary, {packet, 0}]),
+    
+    %% Send HandShake request
+%   Info_Hash = <<203,64,172,123,41,143,0,11,44,106,224,142,188,49,157,136,160,252,145,233>>,
+%   Info_Hash = <<1,8,90,90,74,69,231,75,78,136,246,106,114,204,104,29,116,148,157,27>>,
+%    Info_Hash = commcunf:cut(pars:get_hash(TorrentFileName),
+    ok = gen_tcp:send(Sock, [19, "BitTorrent protocol",
+			     <<0,0,0,0,0,0,0,0>>,
+			     Info_Hash,
+			     "funkytorrents_rules!"]),
+    
+    %% Wait for HandShake back
+    receive
+	{tcp, _Port, << 19, "BitTorrent protocol", 
+			_ReservedBytes:8/binary, 
+			_InfoHash:20/binary, 
+			_PeerID:20/binary >>} -> 
+	    io:format("Peer accepted HandShake:~w~n", [list_to_atom(binary_to_list(_PeerID))]),
+	    ok
+    after 10000 -> handshake_denied % after 10000 ms close the socket
+    end,
+    receive 
+	{tcp, _, BitField} -> %% the don't-care variable is in fact Port_number
+	    io:format("Vad är detta? ~w~n", [BitField]),
+	 %  spawn_link(commfunc, incomming, [BitField])
+	    commfunc:incomming(BitField) %%currently unused
+    after 10000 ->
+	    ok
+    end,
+    ok = gen_tcp:send(Sock,commfunc:interested()),
+    receive
+	{tcp,_,Answer} ->
+	    io:format("Svar ~w~n",[Answer])
+    end,
+    {Sock,Answer}.
+
+tracker_connect(Announce_URL,Info_hash,Peer_id)->
+
+ %   Announce_URL = "http://85.228.185.132:8001/tracker/announce.php",
+ %  Info_hash = "%CB%40%AC%7B%29%8F%00%0B%2C%6A%E0%8E%BC%31%9D%88%A0%FC%91%E9", % först
+ %   Info_hash = "%01%08%5A%5A%4A%45%E7%4B%4E%88%F6%6A%72%CC%68%1D%74%94%9D%1B",
+ %   Peer_id = "-TR1330-znmphhbrij37",
+    Port = 51413,
+    Uploaded = 0,
+    Downloaded = 0,
+    Left = 0,
+    Event = "stopped",
+    URL = lists:flatten(io_lib:format(
+			  "~s?info_hash=~s&peer_id=~s&port=~p&uploaded=~p&downloaded=~p&left=~p",
+			  [Announce_URL,Info_hash,Peer_id,Port,Uploaded,Downloaded,Left])),   
+    inets:start(),
+    {ok, Reply} = httpc:request(URL),
+
+%%  not the most handsome solution, but need to close the tracker request =) 
+    CloseURL = lists:flatten(io_lib:format(
+			  "~s?info_hash=~s&peer_id=~s&port=~p&uploaded=~p&downloaded=~p&left=~p&event=~s",
+			  [Announce_URL,Info_hash,Peer_id,Port,Uploaded,Downloaded,Left, Event])),
+    {ok, _CloseReply} = httpc:request(CloseURL),
+%% taking out the bencode string from request(Reply).
+
+    {_,_,TheString} = Reply,
+    commfunc:get_peerInfo(TheString).
+
+
+
+
+%% ------------------------------------------------------------------------------
+%% download in module connector controlls the flow from parsing a .torrent-file
+%% to actualy getting the file down to the computers harddrive.
+%% ------------------------------------------------------------------------------
+%%Martin Molin 0762728833
+
+download(PeerID,TorrentFile)->
+    URL = pars:get_announce(TorrentFile),
+    Info_Hash = pars:get_hash(TorrentFile), %%move esc_html to final fix
+    %%io:format("trying to get list~p~p~p~n", [URL, commfunc:escape_html(Info_Hash), PeerID]),
+    PeerInfoList = tracker_connect(URL,commfunc:escape_html(Info_Hash), PeerID),
+    PieceInfo = commfunc:get_pieceInfo(TorrentFile),
+    NoOfPieces = element(1,PieceInfo),
+    register(piece_list,spawn_link(commfunc,get_pieceNumber,[lists:seq(0,NoOfPieces-1)])),
+    
+    check_id(PeerInfoList, PeerID, TorrentFile, PieceInfo).
+
+%% Check peer_id and spawn
+check_id([], _PeerID, _TorrentFile, _PieceInfo) ->
+    ok;
+check_id([{DestinationIP,Port,ExtPeerID}|Tail], PeerID, TorrentFile, PieceInfo)->
+    io:format("~p~n",[list_to_binary(pars:get_hash(TorrentFile))]),
+    case ExtPeerID == PeerID of
+	false ->
+	    spawn(?MODULE,download_process,[ DestinationIP,Port,         %%"192.168.1.4",Port, %%
+		  list_to_binary(pars:get_hash(TorrentFile)),PieceInfo]);%%spawns DLproc
+	   %% check_id([],TorrentFile,PieceInfo);
+	true ->
+	    check_id(Tail,PeerID,TorrentFile,PieceInfo)
+    end.
+
+%% Dowload Process runs by itself
+download_process(IP,Port,Info_Hash,PieceInfo)->
+		 
+{NoOfPieces,LastChunkLength,ChunkLength,NoOfChunksInFullPiece,NoOfFullChunksInLastPiece} = PieceInfo,
+    
+    {Sock,HSAnswer} = handshake(IP,Port,Info_Hash), %%The biary equals answer "unchoke"
+    io:format("hello bjorne o maggan ~w~n",[HSAnswer]),
+    %%gen_tcp:send(Sock,commfunc:keep_alive()),
+
+    piece_list!{get,self()}, %% ask for a piece to make a request for
+    receive
+	empty_list -> 
+	    ok;
+	Piece ->  case Piece == NoOfPieces-1 of %%if there is a piece, do EVERYTHING! (like MASTODONTOR/2000!!!! yeah!)
+		      false ->
+			  spawn(?MODULE,piece_loop,[Sock,Piece,ChunkLength,NoOfChunksInFullPiece,0]);
+		      true ->
+			  spawn(?MODULE,lastPiece_loop,[Sock,Piece,ChunkLength,LastChunkLength,
+							    NoOfFullChunksInLastPiece,0])
+		  end
+    end.
+    
+
+%% ------------------------------------------------------------------------------
+%% piece_loop sends requests for pieces
+%% ------------------------------------------------------------------------------
+piece_loop(_,_,_,0,_) ->
+    io:format("Piece has been downloaded!~n");
+
+piece_loop(Sock,Piece,ChunkLength,Counter,Offset) -> 
+    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,<<Offset:32>>,<<ChunkLength:32>>)),
+		 receive
+		     Data ->
+			 piece_loop(Sock,Piece,ChunkLength,(Counter-1),(Offset+ChunkLength))
+		 end.
+
+%% ------------------------------------------------------------------------------
+%% lastPiece_loop sends requests for pieces
+%% ------------------------------------------------------------------------------
+lastPiece_loop(_,_,_,_,-1,_)->
+    io:format("Piece has been downloaded!~n");
+	       
+lastPiece_loop(Sock,Piece,ChunkLength,LastChunkLength,0,Offset)->
+    io:format("Request for last piece sent~n"),
+        gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,<<Offset:32>>,<<LastChunkLength:32>>)),
+                 receive
+		     Data ->
+			 lastPiece_loop(Sock,Piece,ChunkLength,LastChunkLength,-1,(Offset+ChunkLength))
+		 end;
+
+lastPiece_loop(Sock,Piece,ChunkLength,LastChunkLength,Counter,Offset)->
+    gen_tcp:send(Sock,commfunc:request(<<Piece:32>>,<<Offset:32>>,<<ChunkLength:32>>)),
+                 receive
+		     Data ->
+			 lastPiece_loop(Sock,Piece,ChunkLength,LastChunkLength,(Counter-1),(Offset+ChunkLength))
+		 end.
+    
+
+%% ------------------------------------------------------------------------------
+%% Mastodontor/2000 sind die Überfunktion auf alles Funktionen der Welt.
+%% ------------------------------------------------------------------------------
+
+    
+    
+    
+    

@@ -1,0 +1,83 @@
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor
+END
+our.torrent
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/our.torrent
+END
+gen_servror_sup.erl
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/gen_servror_sup.erl
+END
+parsor.erl
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/parsor.erl
+END
+funky_torrent_app.app
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/funky_torrent_app.app
+END
+parsor.beam
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/parsor.beam
+END
+funky_torrent_app.erl
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/funky_torrent_app.erl
+END
+filedator.erl
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/filedator.erl
+END
+encodor.erl
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/encodor.erl
+END
+README.txt
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/README.txt
+END
+filedator.beam
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/filedator.beam
+END
+gen_servror.erl
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/gen_servror.erl
+END
+encodor.beam
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/encodor.beam
+END
+gen_servror.beam
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/svn/!svn/ver/80/trunk/src/genserver_suppervisor/gen_servror.beam
+END
